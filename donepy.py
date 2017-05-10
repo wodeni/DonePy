@@ -2,9 +2,10 @@
 # Author: Wode "Nimo" Ni
 # a lightweight, easy‐to‐use, command‐line GTD program,
 
+from re import compile
 from argparse import ArgumentParser
 from utils import colors
-# from json import load, dump, loads, dumps
+# from pickle import load, dump, loads, dumps
 from pickle import load, dump, loads, dumps
 import subprocess as sp
 import logging
@@ -14,8 +15,8 @@ import os
 USER_NAME = None
 tasks = []
 get_color = {}
-LOG_FORMAT = "%(levelname)s at %(asctime)s:%(message)s" 
-COMMANDS = ['add', 'remove', 'clear', 'done', 'view']
+LOG_FORMAT = "%(levelname)s at %(asctime)s:%(message)s"
+COMMANDS = ['add', 'clear', 'done', 'view']
 CLASSES  = ['todo']
 MODULE_MAIN_NAME = __name__
 
@@ -23,6 +24,7 @@ class task:
     "Main task class that represent a generic task"
     def __init__(self, id, desc):
         self._id = id
+        self._cur = 0
         self._desc = desc
         self._subtasks = []
     # Trying hard to be Pytonic here
@@ -44,9 +46,19 @@ class task:
     @subtasks.setter
     def subtasks(self, s):
         self._subtasks = s
-    def __add__(self, r):
+    def __iadd__(self, r):
         self.subtasks.append(r)
-
+        return self
+    def __iter__(self):
+        return self.subtasks
+    def __next__(self):
+        if(self._cur > len(self.subtasks)):
+            raise StopIteration
+        else:
+            self._cur += 1
+            return self.subtasks[self._cur - 1]
+    def __getitem__(self, index):
+        return self.subtasks(index)
 
 class todo(task):
     "A todo task"
@@ -61,8 +73,10 @@ class todo(task):
     def done(self, done):
         self._done = done
         def mark_done(task, v):
-            if(len(task.subtasks) != 0):
-                map(mark_done,task.subtasks)
+            for subtask in task:
+                mark_done(subtask)
+            #if(len(task.subtasks) != 0):
+                #map(mark_done,task.subtasks)
         map(mark_done, self.subtasks)
     def __str__(self):
         global get_color
@@ -78,7 +92,7 @@ def init():
     "Called upon start up, populate information. If none is stored, ask for the user information"
     # Color settings
     global get_color, USER_NAME, tasks
-    color_scheme = {"prompt" : [colors.HEADER, colors.BOLD], 
+    color_scheme = {"prompt" : [colors.HEADER, colors.BOLD],
                     "done" : [colors.OKGREEN],
                     "undone" : [colors.UNDONE],
                     "warning": [colors.YELLOW]}
@@ -99,32 +113,32 @@ def init():
     name = parse_result.name
     clear = parse_result.clear
     # loading init info
-    if(clear or not load_init_json(name)):
+    if(clear or not load_init_pickle(name)):
         print(get_color["prompt"]("Seems like you are here for the first time. Welcome! \nInitializing your info..."))
         USER_NAME = name
         while(not check_username(USER_NAME)):
             USER_NAME = input(get_color["prompt"]("Format error. Please input a name consisting only letters: "))
     print_prompt()
-        
-def write_init_json():
+
+def write_init_pickle():
     global USER_NAME, tasks
-    filename = "donepy/" + USER_NAME + "_donepy_init.json"
+    filename = "donepy/" + USER_NAME + "_donepy_init.pickle"
     os.makedirs(os.path.dirname(filename), exist_ok=True)
     with open(filename, "wb") as opf:
         for t in tasks:
             if(t.done): tasks.remove(t)
         TO_SAVE = {"username": USER_NAME, "tasks":  \
-                   # (t.toJSON() for t in tasks))}
+                   # (t.topickle() for t in tasks))}
                    tasks}
         dump(TO_SAVE, opf)
         # Exactly the same
         logging.debug("Written info to init file")
 
-def load_init_json(name):
-    "Load user info and todos from a json file"
+def load_init_pickle(name):
+    "Load user info and todos from a pickle file"
     global USER_NAME, tasks
     try:
-        with open("donepy/" + name + "_donepy_init.json", "rb") as ipf:
+        with open("donepy/" + name + "_donepy_init.pickle", "rb") as ipf:
             loaded = load(ipf)
             USER_NAME = loaded["username"]
             tasks = loaded["tasks"]
@@ -135,19 +149,24 @@ def load_init_json(name):
         logging.debug("Cannot find init file for " + name)
         return False
 
-def check_username(name):
+def check_username(username):
     "Use regex to check the validity of the username"
-    return True
+    name = compile("^[a-z]+$")
+    username = username.lower()
+    if(name.search(username)):
+        return True
+    else:
+        return False
 def check_idx(idx):
-    return True
+    pass
 
 def print_prompt():
     global tasks
     num_tasks = len(tasks)
-    greeting = "Hey " + USER_NAME + ", you currently have " 
-    if(num_tasks == 1): 
+    greeting = "Hey " + USER_NAME + ", you currently have "
+    if(num_tasks == 1):
         greeting += str(num_tasks) + " task to do: "
-    else: 
+    else:
         greeting += str(num_tasks) + " tasks to do: "
     if(num_tasks == 0):
         greeting += "\n\tYou really have nothing to do?"
@@ -157,9 +176,9 @@ def print_prompt():
 
 def print_tasks(tasks, level, id):
     if(tasks == None): return
-    for i, task in enumerate(tasks): 
+    for i, task in enumerate(tasks):
         print('\t' * level + id + str(i) + " - " + str(task))
-        print_tasks(task.subtasks, level + 1, id + "." + str(i))
+        print_tasks(task.subtasks, level + 1, id + str(i) + ".")
 
 def cmd(cmd):
     "main function that processes commands"
@@ -174,12 +193,12 @@ def process_cmd(cmd, args):
     "helper function that invokes the actual methods"
     if(cmd == 'add'):
         cmd_add(args[0])
-    elif(cmd == 'remove'):
-        cmd_remove(args)
+    # elif(cmd == 'remove'):
+    #    cmd_remove(args)
     elif(cmd == 'clear'):
         clear()
     elif(cmd == 'done'):
-        cmd_done(args[0])
+        cmd_done(*tuple(args))
     elif(cmd == 'view'):
         print_prompt()
     else:
@@ -189,28 +208,38 @@ def cmd_add(task_class):
     if(task_class in CLASSES):
         if(task_class == "todo"):
             desc = input(get_color['prompt']("Description of the todo: "))
-            t = todo(len(tasks), desc, False)
-            tasks.append(t)
+            new_task = todo(len(tasks), desc, False)
+            tasks.append(new_task)
+            while(True):
+                instr = input(get_color['prompt']("Do you want to attach subtasks? [y/n] "))
+                if(instr == 'n'):
+                    break
+                desc = input(get_color['prompt']("Description of the todo: "))
+                sub_t = todo(len(tasks), desc, False)
+                new_task += sub_t
         print_prompt()
 
-    else: 
+    else:
         print(get_color['warning']("[ERROR]: Invalid argument to the add operation"))
 
-def cmd_done(idx):
-    if(check_idx(idx)):
-        task = find_task(idx)
-        task.done = True
-        print_prompt()
-    else:
-        print(get_color['warning']("[ERROR]: Invalid argument to the done operation"))
+def cmd_done(*idx):
+    for i in idx:
+        task = find_task(i)
+        if(task == None):
+            print(get_color['warning']("[ERROR]: Invalid argument to the done operation"))
+        else:
+            task.done = True
+    print_prompt()
 
 def find_task(string):
     "given a string in the format like '1.1.1', find the correct object"
     arr = string.split(".")
     cur_tasks = tasks
     for i in arr:
-        task = cur_tasks[int(i)]    
-        if(len(task.subtasks) != 0): 
+        if(int(i) >= len(cur_tasks)):
+            return None
+        task = cur_tasks[int(i)]
+        if(len(task.subtasks) != 0):
             cur_tasks = task.subtasks
     return task
 
@@ -228,7 +257,7 @@ def main():
 
     # Exiting the program
     logging.debug("Exiting DonePy")
-    write_init_json()
+    write_init_pickle()
 
 if(__name__ == "__main__"):
     main()
